@@ -1,6 +1,6 @@
 # mobile-dev-group-project
 
-FindIt Application
+# FindIt Application
 
 # Description
 A mobile application designed to help ECU staff manage lost and found property around campus. Users can register and find items, update the item’s information, mark the items as claimed, and remove them from the database.
@@ -9,5 +9,4 @@ Students will be able to find their lost items, search by name or campus locatio
 
 # Database Design
 
-Lost Item Table:
 <img width="689" height="325" alt="image" src="https://github.com/user-attachments/assets/2df68643-eadf-4166-b229-54a0e116b351" />
