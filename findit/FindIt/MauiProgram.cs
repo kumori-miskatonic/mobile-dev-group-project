@@ -1,5 +1,7 @@
 ﻿using Microsoft.Extensions.Logging;
 
+using FindIt.Data;
+
 namespace FindIt;
 
 public static class MauiProgram
@@ -18,6 +20,8 @@ public static class MauiProgram
 #if DEBUG
 		builder.Logging.AddDebug();
 #endif
+
+		builder.Services.AddSingleton<FindItDatabase>();
 
 		return builder.Build();
 	}

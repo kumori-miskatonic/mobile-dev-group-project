@@ -1,0 +1,19 @@
+# .NET build output
+**/bin/
+**/obj/
+
+# IDE and user-specific files
+.vs/
+.vscode/
+*.user
+*.suo
+
+# Generated local databases
+*.db
+*.db3
+*.sqlite
+*.sqlite3
+
+# OS-generated files
+.DS_Store
+Thumbs.db
