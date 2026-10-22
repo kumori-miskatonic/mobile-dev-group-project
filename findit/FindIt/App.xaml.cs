@@ -16,7 +16,6 @@ public partial class App : Application
 
 	protected override Window CreateWindow(IActivationState? activationState)
 	{
-		_ = _database.InitializeAsync();
-		return new Window(new AppShell());
+		return new Window(new MainPage(_database));
 	}
 }

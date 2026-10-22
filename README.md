@@ -144,7 +144,7 @@ The Android application requires Android API level 24 or later.
 
 ## Challenges
 
-There were encoutered several setup and compatibility challenges during Week 1:
+The team encountered several setup and compatibility challenges during Week 1:
 
 - The project uses .NET 11 Preview 7, requiring every team member to use a compatible SDK and MAUI workload.
 - Visual Studio attempted to use a newer .NET 11 release candidate instead of the version selected by the team.
@@ -154,3 +154,58 @@ There were encoutered several setup and compatibility challenges during Week 1:
 - Samsung Auto Blocker temporarily prevented USB debugging during physical-device testing.
 
 These issues were resolved without changing the project's selected .NET SDK version.
+
+# Week 2 - CRUD and Change Tracking
+
+During Week 2, the team implemented local create, update, and delete operations for lost-item records. These operations work offline against the SQLite database stored on the Android device.
+
+## Create, Update, and Delete
+
+The FindIt mobile interface now allows staff members to:
+
+- Create a lost-item record with a name, description, location, date, status, and staff-member name
+- View all active lost-item records stored on the device
+- Edit an existing record and save its updated values
+- Soft-delete a record so it is hidden from the active list without removing its history
+
+Every operation refreshes the displayed information from SQLite after it completes. Required fields are validated before records are saved.
+
+### Device UI Before Change
+
+![Device UI before change](Screenshots/Week%202%20Device%20UI%20Before.png)
+
+### Device UI After Change
+
+![Device UI after change](Screenshots/Week%202%20Device%20UI%20After.png)
+
+## Device Database Before and After Change
+
+The `LostItem` table stores the current state of each item. Deleted records remain in the table with `IsDeleted` set to `true`, which preserves them for auditing and future synchronization.
+
+### Device Table Before Change
+
+![Device LostItem table before change](Screenshots/Week%202%20Device%20Table%20Before.png)
+
+### Device Table After Change
+
+![Device LostItem table after change](Screenshots/Week%202%20Device%20Table%20After.png)
+
+## Change Tracking Mechanism
+
+FindIt creates an immutable entry in the `ItemChanges` table whenever a lost item is created, updated, or deleted. Each entry records:
+
+- The related lost-item identifier
+- The operation type (`Created`, `Updated`, or `Deleted`)
+- The UTC date and time of the operation
+- The staff member who performed the operation
+- A summary of the item state after the operation
+
+The item update and its change-tracking entry are written within the same SQLite transaction. This prevents an item from changing without a corresponding audit record.
+
+### Change Tracking Evidence
+
+![ItemChanges audit records](Screenshots/Week%202%20Change%20Tracking.png)
+
+## Week 2 Summary
+
+Week 2 established the offline data-management workflow required by FindIt. Staff can now create, update, and soft-delete records on an Android device, and every operation is recorded in a separate audit table. Server synchronization remains planned for a later week.
