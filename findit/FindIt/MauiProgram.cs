@@ -1,6 +1,7 @@
 ﻿using Microsoft.Extensions.Logging;
 
 using FindIt.Data;
+using FindIt.Services;
 
 namespace FindIt;
 
@@ -22,6 +23,11 @@ public static class MauiProgram
 #endif
 
 		builder.Services.AddSingleton<FindItDatabase>();
+		builder.Services.AddSingleton(new HttpClient
+		{
+			Timeout = TimeSpan.FromSeconds(30)
+		});
+		builder.Services.AddSingleton<SyncService>();
 
 		return builder.Build();
 	}

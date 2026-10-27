@@ -209,3 +209,66 @@ The item update and its change-tracking entry are written within the same SQLite
 ## Week 2 Summary
 
 Week 2 established the offline data-management workflow required by FindIt. Staff can now create, update, and soft-delete records on an Android device, and every operation is recorded in a separate audit table. Server synchronization remains planned for a later week.
+
+# Week 3 - Server Synchronization
+
+During Week 3, the team implemented one-way synchronization from the FindIt Android application to the FindIt server. Changes created while the device is offline remain in the local `ItemChanges` table until the server confirms that they were received and processed successfully.
+
+## Push Endpoint
+
+The server provides the following endpoint:
+
+```text
+POST /sync/push
+```
+
+The mobile application sends its pending create, update, and delete operations to this endpoint as a JSON batch. For every change, the request includes a unique change identifier, the operation type, timestamps, staff-member information, and the complete lost-item state.
+
+The server processes the complete batch inside a SQLite transaction. It:
+
+- Records each unique request in the `ReceivedChanges` table
+- Uses the change identifier to prevent a retried request from being processed twice
+- Inserts or updates the corresponding record in the server `LostItems` table
+- Preserves soft-deleted records by storing their `IsDeleted` state
+- Records when each received change was processed
+- Returns the identifiers of all changes accepted by the server
+
+## Sending and Clearing Pending Changes
+
+The Android application displays the number of changes waiting in the local queue. A staff member enters the server address and selects **Send Pending Changes** to start synchronization.
+
+The application removes local `ItemChanges` records only when their identifiers are included in a successful server response. If the request fails or the server cannot be reached, the pending records remain on the device so they can be retried later.
+
+When testing on a physical Android phone, the server must listen on the computer's network interface and the phone must use the computer's LAN IP address, such as:
+
+```text
+http://192.168.1.25:5187
+```
+
+## Week 3 Evidence
+
+The following screenshots document the completed device-to-server synchronization test:
+
+### Server Database Before Changes Are Pushed
+
+![Server database before changes are pushed](Screenshots/Week%203%20Server%20Database%20Before.png)
+
+### Pending Changes on Device Waiting to Be Synchronized
+
+![Pending changes on device before synchronization](Screenshots/Week%203%20Device%20Pending%20Before.png)
+
+### Pending Changes on Device After Successful Synchronization
+
+![Pending changes cleared after successful synchronization](Screenshots/Week%203%20Device%20Pending%20After.png)
+
+### Server Database After Receiving Changes
+
+![Server database after receiving device changes](Screenshots/Week%203%20Server%20Received%20Changes.png)
+
+### Server Database After Processing Changes
+
+![Server database after processing device changes](Screenshots/Week%203%20Server%20Processed%20Changes.png)
+
+## Week 3 Summary
+
+Week 3 connected the device's offline change queue to the server. Pending changes can now be sent in one batch, processed idempotently, and removed from the device only after server confirmation. This protects unsynchronized work from being lost when a network request fails.

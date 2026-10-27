@@ -3,15 +3,17 @@
 public partial class MainPage : ContentPage
 {
 	private readonly Data.FindItDatabase _database;
+	private readonly Services.SyncService _syncService;
 	private Models.LostItem? _editingItem;
 
 	public System.Collections.ObjectModel.ObservableCollection<Models.LostItem> Items { get; } = [];
 	public System.Collections.ObjectModel.ObservableCollection<Models.ItemChange> Changes { get; } = [];
 
-	public MainPage(Data.FindItDatabase database)
+	public MainPage(Data.FindItDatabase database, Services.SyncService syncService)
 	{
 		InitializeComponent();
 		_database = database;
+		_syncService = syncService;
 		BindingContext = this;
 		DateFoundPicker.Date = DateTime.Today;
 	}
@@ -101,6 +103,38 @@ public partial class MainPage : ContentPage
 
 	private async void OnRefreshClicked(object? sender, EventArgs e) => await LoadDataAsync();
 
+	private async void OnSyncClicked(object? sender, EventArgs e)
+	{
+		var pending = await _database.GetPendingChangesAsync();
+		if (pending.Count == 0)
+		{
+			await DisplayAlertAsync("Sync", "There are no pending changes to send.", "OK");
+			return;
+		}
+
+		SyncButton.IsEnabled = false;
+		SyncStatusLabel.Text = $"Sending {pending.Count} pending change(s)...";
+
+		try
+		{
+			var result = await _syncService.PushAsync(ServerUrlEntry.Text ?? string.Empty, pending);
+			await _database.ClearPendingChangesAsync(result.AcceptedChangeIds);
+			await LoadDataAsync();
+
+			SyncStatusLabel.Text = $"Sync successful: {result.AcceptedChangeIds.Count} change(s) cleared.";
+			await DisplayAlertAsync("Sync complete", "The server accepted the pending changes.", "OK");
+		}
+		catch (Exception ex)
+		{
+			SyncStatusLabel.Text = $"Sync failed. {pending.Count} change(s) remain pending.";
+			await DisplayAlertAsync("Sync failed", ex.Message, "OK");
+		}
+		finally
+		{
+			SyncButton.IsEnabled = true;
+		}
+	}
+
 	private async Task LoadDataAsync()
 	{
 		var items = await _database.GetItemsAsync();
@@ -113,6 +147,8 @@ public partial class MainPage : ContentPage
 		Changes.Clear();
 		foreach (var change in changes)
 			Changes.Add(change);
+
+		PendingCountLabel.Text = $"Pending changes: {changes.Count}";
 	}
 
 	private bool ValidateForm() =>

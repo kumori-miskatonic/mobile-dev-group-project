@@ -57,6 +57,17 @@
                 </BindableLayout.ItemTemplate>
             </VerticalStackLayout>
 
+            <Border Padding="16" StrokeShape="RoundRectangle 14">
+                <VerticalStackLayout Spacing="10">
+                    <Label Text="Server Synchronization" FontSize="21" FontAttributes="Bold" />
+                    <Label Text="Use your computer's LAN address when testing on a physical phone." FontSize="13" />
+                    <Entry x:Name="ServerUrlEntry" Text="http://10.0.2.2:5187" Placeholder="http://computer-ip:5187" Keyboard="Url" />
+                    <Label x:Name="PendingCountLabel" Text="Pending changes: 0" FontAttributes="Bold" />
+                    <Button x:Name="SyncButton" Text="Send Pending Changes" Clicked="OnSyncClicked" />
+                    <Label x:Name="SyncStatusLabel" Text="Changes are cleared only after server confirmation." FontSize="13" />
+                </VerticalStackLayout>
+            </Border>
+
             <Label Text="Change Tracking" FontSize="23" FontAttributes="Bold" Margin="0,8,0,0" />
             <VerticalStackLayout BindableLayout.ItemsSource="{Binding Changes}" Spacing="8">
                 <BindableLayout.EmptyView>

@@ -42,6 +42,50 @@ public class FindItDatabase
             .ToListAsync();
     }
 
+    public async Task<List<PendingItemChange>> GetPendingChangesAsync()
+    {
+        await InitializeAsync();
+
+        var changes = await _database.Table<ItemChange>()
+            .OrderBy(change => change.ChangedAt)
+            .ToListAsync();
+        var items = await _database.Table<LostItem>().ToListAsync();
+        var itemsById = items.ToDictionary(item => item.Id);
+
+        return changes.Select(change =>
+        {
+            itemsById.TryGetValue(change.LostItemId, out var item);
+
+            return new PendingItemChange
+            {
+                ChangeId = change.Id,
+                LostItemId = change.LostItemId,
+                ChangeType = change.ChangeType,
+                ChangedAt = change.ChangedAt,
+                ItemName = ValueOrFallback(change.ItemName, item?.ItemName),
+                Description = ValueOrFallback(change.Description, item?.Description),
+                LocationFound = ValueOrFallback(change.LocationFound, item?.LocationFound),
+                DateFound = change.DateFound == default ? item?.DateFound ?? default : change.DateFound,
+                Status = ValueOrFallback(change.Status, item?.Status),
+                LastModified = change.ChangedAt,
+                ModifiedBy = ValueOrFallback(change.ModifiedBy, item?.ModifiedBy),
+                IsDeleted = change.ChangeType == "Deleted" || change.IsDeleted
+            };
+        }).ToList();
+    }
+
+    public async Task ClearPendingChangesAsync(IEnumerable<string> acceptedChangeIds)
+    {
+        await InitializeAsync();
+
+        var ids = acceptedChangeIds.Distinct().ToList();
+        await _database.RunInTransactionAsync(connection =>
+        {
+            foreach (var id in ids)
+                connection.Delete<ItemChange>(id);
+        });
+    }
+
     public async Task CreateItemAsync(LostItem item)
     {
         await InitializeAsync();
@@ -105,7 +149,15 @@ public class FindItDatabase
             ChangedAt = item.LastModified,
             ModifiedBy = item.ModifiedBy,
             ItemName = item.ItemName,
+            Description = item.Description,
+            LocationFound = item.LocationFound,
+            DateFound = item.DateFound,
+            Status = item.Status,
+            IsDeleted = item.IsDeleted,
             Summary = $"{item.ItemName} | {item.Status} | {item.LocationFound}"
         };
     }
+
+    private static string ValueOrFallback(string value, string? fallback) =>
+        string.IsNullOrWhiteSpace(value) ? fallback ?? string.Empty : value;
 }
