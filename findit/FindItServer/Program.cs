@@ -40,6 +40,23 @@ await using (var connection = new SqliteConnection(connectionString))
             ReceivedAt TEXT NOT NULL,
             ProcessedAt TEXT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS DownloadBatches (
+            Id TEXT PRIMARY KEY,
+            DeviceId TEXT NOT NULL,
+            RequestedAfter TEXT NOT NULL,
+            ServerWatermark TEXT NOT NULL,
+            CreatedAt TEXT NOT NULL,
+            CompletedAt TEXT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS DownloadedChanges (
+            BatchId TEXT NOT NULL,
+            LostItemId TEXT NOT NULL,
+            LastModified TEXT NOT NULL,
+            IsDeleted INTEGER NOT NULL,
+            PRIMARY KEY (BatchId, LostItemId)
+        );
         """;
 
     await command.ExecuteNonQueryAsync();
@@ -146,9 +163,123 @@ app.MapPost("/sync/push", async (PushChangesRequest request) =>
     }
 });
 
+app.MapPost("/sync/pull", async (PullChangesRequest request) =>
+{
+    if (string.IsNullOrWhiteSpace(request.DeviceId))
+        return Results.BadRequest(new { error = "A device ID is required." });
+
+    var batchId = Guid.NewGuid().ToString();
+    var serverWatermark = DateTime.UtcNow;
+    var items = new List<PulledLostItem>();
+
+    await using var connection = new SqliteConnection(connectionString);
+    await connection.OpenAsync();
+    await using var transaction = connection.BeginTransaction();
+
+    try
+    {
+        var selectCommand = connection.CreateCommand();
+        selectCommand.Transaction = transaction;
+        selectCommand.CommandText =
+            """
+            SELECT Id, ItemName, Description, LocationFound, DateFound, Status,
+                   LastModified, ModifiedBy, IsDeleted
+            FROM LostItems
+            WHERE LastModified > $lastPulledAt
+              AND LastModified <= $serverWatermark
+            ORDER BY LastModified, Id;
+            """;
+        selectCommand.Parameters.AddWithValue("$lastPulledAt", ToDatabaseDate(request.LastPulledAt));
+        selectCommand.Parameters.AddWithValue("$serverWatermark", ToDatabaseDate(serverWatermark));
+
+        await using (var reader = await selectCommand.ExecuteReaderAsync())
+        {
+            while (await reader.ReadAsync())
+            {
+                items.Add(new PulledLostItem(
+                    reader.GetString(0),
+                    reader.GetString(1),
+                    reader.GetString(2),
+                    reader.GetString(3),
+                    ParseDatabaseDate(reader.GetString(4)),
+                    reader.GetString(5),
+                    ParseDatabaseDate(reader.GetString(6)),
+                    reader.GetString(7),
+                    reader.GetInt64(8) != 0));
+            }
+        }
+
+        var batchCommand = connection.CreateCommand();
+        batchCommand.Transaction = transaction;
+        batchCommand.CommandText =
+            """
+            INSERT INTO DownloadBatches
+                (Id, DeviceId, RequestedAfter, ServerWatermark, CreatedAt, CompletedAt)
+            VALUES
+                ($id, $deviceId, $requestedAfter, $serverWatermark, $createdAt, NULL);
+            """;
+        batchCommand.Parameters.AddWithValue("$id", batchId);
+        batchCommand.Parameters.AddWithValue("$deviceId", request.DeviceId);
+        batchCommand.Parameters.AddWithValue("$requestedAfter", ToDatabaseDate(request.LastPulledAt));
+        batchCommand.Parameters.AddWithValue("$serverWatermark", ToDatabaseDate(serverWatermark));
+        batchCommand.Parameters.AddWithValue("$createdAt", ToDatabaseDate(DateTime.UtcNow));
+        await batchCommand.ExecuteNonQueryAsync();
+
+        foreach (var item in items)
+        {
+            var detailCommand = connection.CreateCommand();
+            detailCommand.Transaction = transaction;
+            detailCommand.CommandText =
+                """
+                INSERT INTO DownloadedChanges (BatchId, LostItemId, LastModified, IsDeleted)
+                VALUES ($batchId, $lostItemId, $lastModified, $isDeleted);
+                """;
+            detailCommand.Parameters.AddWithValue("$batchId", batchId);
+            detailCommand.Parameters.AddWithValue("$lostItemId", item.Id);
+            detailCommand.Parameters.AddWithValue("$lastModified", ToDatabaseDate(item.LastModified));
+            detailCommand.Parameters.AddWithValue("$isDeleted", item.IsDeleted ? 1 : 0);
+            await detailCommand.ExecuteNonQueryAsync();
+        }
+
+        await transaction.CommitAsync();
+        return Results.Ok(new PullChangesResponse(batchId, serverWatermark, items));
+    }
+    catch
+    {
+        await transaction.RollbackAsync();
+        throw;
+    }
+});
+
+app.MapPost("/sync/pull/ack", async (AcknowledgePullRequest request) =>
+{
+    if (string.IsNullOrWhiteSpace(request.BatchId) || string.IsNullOrWhiteSpace(request.DeviceId))
+        return Results.BadRequest(new { error = "A batch ID and device ID are required." });
+
+    await using var connection = new SqliteConnection(connectionString);
+    await connection.OpenAsync();
+
+    var command = connection.CreateCommand();
+    command.CommandText =
+        """
+        UPDATE DownloadBatches
+        SET CompletedAt = COALESCE(CompletedAt, $completedAt)
+        WHERE Id = $batchId AND DeviceId = $deviceId;
+        """;
+    command.Parameters.AddWithValue("$completedAt", ToDatabaseDate(DateTime.UtcNow));
+    command.Parameters.AddWithValue("$batchId", request.BatchId);
+    command.Parameters.AddWithValue("$deviceId", request.DeviceId);
+
+    return await command.ExecuteNonQueryAsync() == 1
+        ? Results.Ok(new { status = "acknowledged" })
+        : Results.NotFound(new { error = "The download batch was not found." });
+});
+
 app.Run();
 
 static string ToDatabaseDate(DateTime value) => value.ToUniversalTime().ToString("O");
+static DateTime ParseDatabaseDate(string value) =>
+    DateTime.Parse(value, null, System.Globalization.DateTimeStyles.RoundtripKind).ToUniversalTime();
 
 public sealed record PushChangesRequest(List<PendingItemChange> Changes);
 
@@ -167,3 +298,23 @@ public sealed record PendingItemChange(
     bool IsDeleted);
 
 public sealed record PushChangesResponse(List<string> AcceptedChangeIds, int ReceivedCount);
+
+public sealed record PullChangesRequest(string DeviceId, DateTime LastPulledAt);
+
+public sealed record PullChangesResponse(
+    string BatchId,
+    DateTime ServerWatermark,
+    List<PulledLostItem> Items);
+
+public sealed record PulledLostItem(
+    string Id,
+    string ItemName,
+    string Description,
+    string LocationFound,
+    DateTime DateFound,
+    string Status,
+    DateTime LastModified,
+    string ModifiedBy,
+    bool IsDeleted);
+
+public sealed record AcknowledgePullRequest(string BatchId, string DeviceId);

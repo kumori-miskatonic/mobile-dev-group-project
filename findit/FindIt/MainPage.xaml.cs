@@ -135,6 +135,71 @@ public partial class MainPage : ContentPage
 		}
 	}
 
+	private async void OnPullClicked(object? sender, EventArgs e)
+	{
+		var waitingToProcess = await _database.GetUnprocessedIncomingCountAsync();
+		if (waitingToProcess > 0)
+		{
+			await DisplayAlertAsync(
+				"Downloaded changes waiting",
+				$"Apply the existing {waitingToProcess} downloaded change(s) before downloading another batch.",
+				"OK");
+			return;
+		}
+
+		PullButton.IsEnabled = false;
+		PullStatusLabel.Text = "Checking the server for changes...";
+
+		try
+		{
+			var serverUrl = ServerUrlEntry.Text ?? string.Empty;
+			var lastPulledAt = await _database.GetLastPullCursorAsync();
+			var response = await _syncService.PullAsync(serverUrl, lastPulledAt);
+			var downloaded = await _database.StagePulledChangesAsync(response);
+
+			PullStatusLabel.Text = $"Downloaded {downloaded} change(s). Ready to process.";
+			await DisplayAlertAsync("Download complete", PullStatusLabel.Text, "OK");
+		}
+		catch (Exception ex)
+		{
+			PullStatusLabel.Text = "Pull failed. Existing device data was preserved.";
+			await DisplayAlertAsync("Pull failed", ex.Message, "OK");
+		}
+		finally
+		{
+			PullButton.IsEnabled = true;
+		}
+	}
+
+	private async void OnApplyPullClicked(object? sender, EventArgs e)
+	{
+		ApplyPullButton.IsEnabled = false;
+		PullStatusLabel.Text = "Applying downloaded changes...";
+
+		try
+		{
+			var applied = await _database.ApplyStagedChangesAsync();
+			await _syncService.AcknowledgePullAsync(
+				ServerUrlEntry.Text ?? string.Empty,
+				applied.BatchId);
+			await LoadDataAsync();
+
+			PullStatusLabel.Text =
+				$"Processing complete: {applied.Inserted} added, {applied.Updated} updated, "
+				+ $"{applied.Deleted} deleted, {applied.Ignored} older change(s) ignored.";
+			await DisplayAlertAsync("Processing complete", PullStatusLabel.Text, "OK");
+		}
+		catch (Exception ex)
+		{
+			PullStatusLabel.Text = "Processing failed. Downloaded data was preserved.";
+			await DisplayAlertAsync("Processing failed", ex.Message, "OK");
+		}
+		finally
+		{
+			ApplyPullButton.IsEnabled = true;
+		}
+	}
+
 	private async Task LoadDataAsync()
 	{
 		var items = await _database.GetItemsAsync();

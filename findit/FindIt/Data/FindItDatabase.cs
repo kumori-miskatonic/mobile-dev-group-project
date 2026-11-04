@@ -5,6 +5,9 @@ namespace FindIt.Data;
 
 public class FindItDatabase
 {
+    private const string PullCursorKey = "PullCursor";
+    private const string PendingPullBatchKey = "PendingPullBatch";
+    private const string PendingPullWatermarkKey = "PendingPullWatermark";
     private readonly SQLiteAsyncConnection _database;
     private Task? _initializationTask;
 
@@ -86,6 +89,145 @@ public class FindItDatabase
         });
     }
 
+    public async Task<DateTime> GetLastPullCursorAsync()
+    {
+        await InitializeAsync();
+
+        var state = await _database.FindAsync<SyncState>(PullCursorKey);
+        return state is not null
+            && DateTime.TryParse(state.Value, null, System.Globalization.DateTimeStyles.RoundtripKind, out var cursor)
+                ? cursor.ToUniversalTime()
+                : DateTime.UnixEpoch;
+    }
+
+    public async Task<int> StagePulledChangesAsync(PullChangesResponse response)
+    {
+        await InitializeAsync();
+
+        var items = response.Items.ToList();
+        await _database.RunInTransactionAsync(connection =>
+        {
+            foreach (var incoming in items)
+            {
+                connection.InsertOrReplace(new IncomingChange
+                {
+                    Id = $"{response.BatchId}:{incoming.Id}",
+                    BatchId = response.BatchId,
+                    LostItemId = incoming.Id,
+                    ItemName = incoming.ItemName,
+                    Description = incoming.Description,
+                    LocationFound = incoming.LocationFound,
+                    DateFound = incoming.DateFound,
+                    Status = incoming.Status,
+                    LastModified = incoming.LastModified.ToUniversalTime(),
+                    ModifiedBy = incoming.ModifiedBy,
+                    IsDeleted = incoming.IsDeleted,
+                    DownloadedAt = DateTime.UtcNow,
+                    ProcessedAt = null
+                });
+            }
+
+            connection.InsertOrReplace(new SyncState
+            {
+                Key = PendingPullBatchKey,
+                Value = response.BatchId
+            });
+            connection.InsertOrReplace(new SyncState
+            {
+                Key = PendingPullWatermarkKey,
+                Value = response.ServerWatermark.ToUniversalTime().ToString("O")
+            });
+        });
+
+        return items.Count;
+    }
+
+    public async Task<int> GetUnprocessedIncomingCountAsync()
+    {
+        await InitializeAsync();
+        return await _database.Table<IncomingChange>()
+            .Where(change => change.ProcessedAt == null)
+            .CountAsync();
+    }
+
+    public async Task<PullApplyResult> ApplyStagedChangesAsync()
+    {
+        await InitializeAsync();
+
+        var batchState = await _database.FindAsync<SyncState>(PendingPullBatchKey)
+            ?? throw new InvalidOperationException("Download server changes before processing them.");
+        var watermarkState = await _database.FindAsync<SyncState>(PendingPullWatermarkKey)
+            ?? throw new InvalidOperationException("The downloaded batch is missing its server timestamp.");
+        if (!DateTime.TryParse(
+            watermarkState.Value,
+            null,
+            System.Globalization.DateTimeStyles.RoundtripKind,
+            out var serverWatermark))
+        {
+            throw new InvalidOperationException("The downloaded batch has an invalid server timestamp.");
+        }
+
+        var staged = await _database.Table<IncomingChange>()
+            .Where(change => change.BatchId == batchState.Value && change.ProcessedAt == null)
+            .ToListAsync();
+        var result = new PullApplyResult { BatchId = batchState.Value };
+        var processedAt = DateTime.UtcNow;
+
+        await _database.RunInTransactionAsync(connection =>
+        {
+            foreach (var incoming in staged)
+            {
+                var existing = connection.Find<LostItem>(incoming.LostItemId);
+                if (existing is not null
+                    && existing.LastModified.ToUniversalTime() > incoming.LastModified.ToUniversalTime())
+                {
+                    result.Ignored++;
+                    incoming.ProcessedAt = processedAt;
+                    connection.Update(incoming);
+                    continue;
+                }
+
+                var item = existing ?? new LostItem { Id = incoming.LostItemId };
+                item.ItemName = incoming.ItemName;
+                item.Description = incoming.Description;
+                item.LocationFound = incoming.LocationFound;
+                item.DateFound = incoming.DateFound;
+                item.Status = incoming.Status;
+                item.LastModified = incoming.LastModified.ToUniversalTime();
+                item.ModifiedBy = incoming.ModifiedBy;
+                item.IsDeleted = incoming.IsDeleted;
+
+                if (existing is null)
+                {
+                    connection.Insert(item);
+                    if (incoming.IsDeleted)
+                        result.Deleted++;
+                    else
+                        result.Inserted++;
+                }
+                else
+                {
+                    connection.Update(item);
+                    if (incoming.IsDeleted)
+                        result.Deleted++;
+                    else
+                        result.Updated++;
+                }
+
+                incoming.ProcessedAt = processedAt;
+                connection.Update(incoming);
+            }
+
+            connection.InsertOrReplace(new SyncState
+            {
+                Key = PullCursorKey,
+                Value = serverWatermark.ToUniversalTime().ToString("O")
+            });
+        });
+
+        return result;
+    }
+
     public async Task CreateItemAsync(LostItem item)
     {
         await InitializeAsync();
@@ -138,6 +280,8 @@ public class FindItDatabase
     {
         await _database.CreateTableAsync<LostItem>();
         await _database.CreateTableAsync<ItemChange>();
+        await _database.CreateTableAsync<SyncState>();
+        await _database.CreateTableAsync<IncomingChange>();
     }
 
     private static ItemChange CreateChange(LostItem item, string changeType)

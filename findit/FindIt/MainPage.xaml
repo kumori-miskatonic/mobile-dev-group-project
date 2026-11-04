@@ -64,7 +64,10 @@
                     <Entry x:Name="ServerUrlEntry" Text="http://10.0.2.2:5187" Placeholder="http://computer-ip:5187" Keyboard="Url" />
                     <Label x:Name="PendingCountLabel" Text="Pending changes: 0" FontAttributes="Bold" />
                     <Button x:Name="SyncButton" Text="Send Pending Changes" Clicked="OnSyncClicked" />
+                    <Button x:Name="PullButton" Text="Download Server Changes" Clicked="OnPullClicked" />
+                    <Button x:Name="ApplyPullButton" Text="Apply Downloaded Changes" Clicked="OnApplyPullClicked" />
                     <Label x:Name="SyncStatusLabel" Text="Changes are cleared only after server confirmation." FontSize="13" />
+                    <Label x:Name="PullStatusLabel" Text="Server changes have not been checked yet." FontSize="13" />
                 </VerticalStackLayout>
             </Border>
 

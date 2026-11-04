@@ -272,3 +272,84 @@ The following screenshots document the completed device-to-server synchronizatio
 ## Week 3 Summary
 
 Week 3 connected the device's offline change queue to the server. Pending changes can now be sent in one batch, processed idempotently, and removed from the device only after server confirmation. This protects unsynchronized work from being lost when a network request fails.
+
+# Week 4 - Pull Synchronization
+
+During Week 4, the team implemented pull synchronization so an Android device can download new, updated, and deleted lost-item records from the server. The pull workflow is divided into download and processing stages so incoming data can be inspected before it changes the device's active records.
+
+## Pull Endpoint
+
+The server provides the following endpoint:
+
+```text
+POST /sync/pull
+```
+
+The device sends its unique device identifier and the UTC timestamp of its last completed pull. The server returns every `LostItems` row modified after that timestamp, including records whose `IsDeleted` value is true. The response also contains a batch identifier and a server watermark used as the next pull cursor.
+
+For auditing, the server records each request in `DownloadBatches` and records the included item identifiers in `DownloadedChanges`.
+
+## Downloading and Applying Incoming Changes
+
+The Android application processes server changes in two explicit stages:
+
+1. **Download Server Changes** stores the returned rows in the local `IncomingChanges` staging table without immediately changing `LostItem`.
+2. **Apply Downloaded Changes** processes the staged rows in a SQLite transaction, advances the pull cursor, and acknowledges the completed batch to the server.
+
+When a staged server row is processed:
+
+- A record that does not exist on the device is inserted.
+- A newer server version of an existing record updates the device record.
+- An older server version is ignored so it cannot overwrite newer device data.
+- A row with `IsDeleted` set to true becomes a local soft-delete tombstone and is removed from the active-items display.
+- The staged row receives a `ProcessedAt` timestamp for audit evidence.
+
+After the device applies the batch, it calls:
+
+```text
+POST /sync/pull/ack
+```
+
+The server then records the completion time in `DownloadBatches`. Incoming server changes do not create outbound `ItemChanges`, preventing downloaded records from being pushed back to the server as new local edits.
+
+## Week 4 Evidence
+
+The following screenshots document the completed pull-synchronization test on the Android device and server.
+
+### Server Data Before Changes Are Pulled
+
+The server contains a new record, an updated record, and soft-deleted records waiting to be downloaded by the device.
+
+![Week 4 server data before pull](Screenshots/Week%204%20Server%20Data%20Before%20Pull.png)
+
+### Device Tables Before Pull
+
+Before the pull, the device contains the original versions of its local records and does not contain the new server-only record.
+
+![Week 4 device tables before pull](Screenshots/Week%204%20Device%20Tables%20Before%20Pull.png)
+
+### Device Tables After Download
+
+After downloading, the server records are staged in `IncomingChanges`. The empty `ProcessedAt` values show that the records have not yet been applied to `LostItem`.
+
+![Week 4 device tables after download part 1](Screenshots/Week%204%20Device%20Tables%20After%20Download1.png)
+
+![Week 4 device tables after download part 2](Screenshots/Week%204%20Device%20Tables%20After%20Download2.png)
+
+### Device Tables After Processing
+
+After processing, the new server record is inserted, the existing record is updated, and server-side deletions are represented by local `IsDeleted` tombstones. The staging records also contain `ProcessedAt` timestamps.
+
+![Week 4 device tables after processing part 1](Screenshots/Week%204%20Device%20Tables%20After%20Processing1.png)
+
+![Week 4 device tables after processing part 2](Screenshots/Week%204%20Device%20Tables%20After%20Processing2.png)
+
+### Server Database After Successful Download
+
+The completed server download batch contains a populated `CompletedAt` value, proving that the device acknowledged successful processing.
+
+![Week 4 server download complete](Screenshots/Week%204%20Server%20Download%20Complete1.png)
+
+## Week 4 Summary
+
+Week 4 completed the server-to-device half of synchronization. FindIt now downloads only records changed since the previous completed pull, stages them for inspection, applies inserts and updates transactionally, honors server-side soft deletes, and records a server acknowledgement after successful processing.
