@@ -1,13 +1,17 @@
-﻿namespace FindIt;
+namespace FindIt;
 
 public partial class MainPage : ContentPage
 {
 	private readonly Data.FindItDatabase _database;
 	private readonly Services.SyncService _syncService;
 	private Models.LostItem? _editingItem;
+	private bool _syncInProgress;
+	private bool _connectivitySubscribed;
+	private const string ServerUrlPreference = "findit-server-url";
 
 	public System.Collections.ObjectModel.ObservableCollection<Models.LostItem> Items { get; } = [];
 	public System.Collections.ObjectModel.ObservableCollection<Models.ItemChange> Changes { get; } = [];
+	public System.Collections.ObjectModel.ObservableCollection<Models.SyncAuditLog> AuditLogs { get; } = [];
 
 	public MainPage(Data.FindItDatabase database, Services.SyncService syncService)
 	{
@@ -16,12 +20,19 @@ public partial class MainPage : ContentPage
 		_syncService = syncService;
 		BindingContext = this;
 		DateFoundPicker.Date = DateTime.Today;
+		ServerUrlEntry.Text = Preferences.Default.Get(ServerUrlPreference, "http://10.0.2.2:5187");
 	}
 
 	protected override async void OnAppearing()
 	{
 		base.OnAppearing();
+		if (!_connectivitySubscribed)
+		{
+			Connectivity.Current.ConnectivityChanged += OnConnectivityChanged;
+			_connectivitySubscribed = true;
+		}
 		await LoadDataAsync();
+		await RunFullSyncAsync(automatic: true);
 	}
 
 	private async void OnSaveClicked(object? sender, EventArgs e)
@@ -105,34 +116,114 @@ public partial class MainPage : ContentPage
 
 	private async void OnSyncClicked(object? sender, EventArgs e)
 	{
-		var pending = await _database.GetPendingChangesAsync();
-		if (pending.Count == 0)
-		{
-			await DisplayAlertAsync("Sync", "There are no pending changes to send.", "OK");
-			return;
-		}
+		await RunFullSyncAsync(automatic: false);
+	}
 
+	private async void OnConnectivityChanged(object? sender, ConnectivityChangedEventArgs e)
+	{
+		if (e.NetworkAccess == NetworkAccess.Internet)
+			await RunFullSyncAsync(automatic: true);
+		else
+		{
+			await _database.AddAuditLogAsync(
+				"AutomaticSync", "Offline",
+				"Automatic sync was attempted but no internet connection was available.");
+			SyncStatusLabel.Text = "Automatic sync skipped: device is offline.";
+			await LoadDataAsync();
+		}
+	}
+
+	private async Task RunFullSyncAsync(bool automatic)
+	{
+		if (_syncInProgress)
+			return;
+
+		_syncInProgress = true;
 		SyncButton.IsEnabled = false;
-		SyncStatusLabel.Text = $"Sending {pending.Count} pending change(s)...";
+		var operation = automatic ? "AutomaticSync" : "ManualSync";
+		var serverUrl = ServerUrlEntry.Text?.Trim() ?? string.Empty;
+		Preferences.Default.Set(ServerUrlPreference, serverUrl);
 
 		try
 		{
-			var result = await _syncService.PushAsync(ServerUrlEntry.Text ?? string.Empty, pending);
-			await _database.ClearPendingChangesAsync(result.AcceptedChangeIds);
-			await LoadDataAsync();
+			if (Connectivity.Current.NetworkAccess != NetworkAccess.Internet)
+			{
+				await _database.AddAuditLogAsync(
+					operation, "Offline",
+					$"{operation} was attempted but no internet connection was available.");
+				SyncStatusLabel.Text = $"{(automatic ? "Automatic" : "Manual")} sync skipped: device is offline.";
+				if (!automatic)
+					await DisplayAlertAsync("Sync unavailable", "The device is offline. Pending data was preserved.", "OK");
+				return;
+			}
 
-			SyncStatusLabel.Text = $"Sync successful: {result.AcceptedChangeIds.Count} change(s) cleared.";
-			await DisplayAlertAsync("Sync complete", "The server accepted the pending changes.", "OK");
+			await _database.AddAuditLogAsync(operation, "Started", $"Sync started using {serverUrl}.");
+			SyncStatusLabel.Text = automatic ? "Automatic sync in progress..." : "Sync in progress...";
+
+			var pending = await _database.GetPendingChangesAsync();
+			var pushed = 0;
+			var conflicts = 0;
+			if (pending.Count > 0)
+			{
+				var pushResult = await _syncService.PushAsync(serverUrl, pending);
+				await _database.ClearPendingChangesAsync(pushResult.AcceptedChangeIds);
+				pushed = pushResult.AcceptedChangeIds.Count;
+				conflicts = pushResult.Conflicts.Count;
+				foreach (var conflict in pushResult.Conflicts)
+				{
+					await _database.AddAuditLogAsync(
+						"ConflictResolution", conflict.Resolution, conflict.Details, conflict.LostItemId);
+				}
+			}
+
+			var appliedCount = 0;
+			if (await _database.GetUnprocessedIncomingCountAsync() > 0)
+			{
+				var waiting = await _database.ApplyStagedChangesAsync();
+				appliedCount += waiting.Inserted + waiting.Updated + waiting.Deleted;
+				conflicts += waiting.Ignored;
+				await _syncService.AcknowledgePullAsync(serverUrl, waiting.BatchId);
+			}
+
+			var lastPulledAt = await _database.GetLastPullCursorAsync();
+			var pullResult = await _syncService.PullAsync(serverUrl, lastPulledAt);
+			await _database.StagePulledChangesAsync(pullResult);
+			var applied = await _database.ApplyStagedChangesAsync();
+			appliedCount += applied.Inserted + applied.Updated + applied.Deleted;
+			conflicts += applied.Ignored;
+			await _syncService.AcknowledgePullAsync(serverUrl, applied.BatchId);
+
+			var details = $"Sync completed: {pushed} pushed, {appliedCount} applied, {conflicts} conflict(s) resolved.";
+			await _database.AddAuditLogAsync(operation, "Succeeded", details);
+			await UploadPendingAuditLogsAsync(serverUrl);
+			SyncStatusLabel.Text = details;
+
+			if (!automatic)
+				await DisplayAlertAsync("Sync complete", details, "OK");
 		}
 		catch (Exception ex)
 		{
-			SyncStatusLabel.Text = $"Sync failed. {pending.Count} change(s) remain pending.";
-			await DisplayAlertAsync("Sync failed", ex.Message, "OK");
+			await _database.AddAuditLogAsync(operation, "Failed", $"Sync failed: {ex.Message}");
+			SyncStatusLabel.Text = $"{(automatic ? "Automatic" : "Manual")} sync failed. Pending data was preserved.";
+			if (!automatic)
+				await DisplayAlertAsync("Sync failed", ex.Message, "OK");
 		}
 		finally
 		{
+			_syncInProgress = false;
 			SyncButton.IsEnabled = true;
+			await LoadDataAsync();
 		}
+	}
+
+	private async Task UploadPendingAuditLogsAsync(string serverUrl)
+	{
+		var logs = await _database.GetPendingAuditLogsAsync();
+		if (logs.Count == 0)
+			return;
+
+		var result = await _syncService.UploadAuditLogsAsync(serverUrl, logs);
+		await _database.MarkAuditLogsSyncedAsync(result.AcceptedLogIds);
 	}
 
 	private async void OnPullClicked(object? sender, EventArgs e)
@@ -204,6 +295,7 @@ public partial class MainPage : ContentPage
 	{
 		var items = await _database.GetItemsAsync();
 		var changes = await _database.GetChangesAsync();
+		var auditLogs = await _database.GetAuditLogsAsync();
 
 		Items.Clear();
 		foreach (var item in items)
@@ -213,7 +305,12 @@ public partial class MainPage : ContentPage
 		foreach (var change in changes)
 			Changes.Add(change);
 
+		AuditLogs.Clear();
+		foreach (var log in auditLogs)
+			AuditLogs.Add(log);
+
 		PendingCountLabel.Text = $"Pending changes: {changes.Count}";
+		AuditCountLabel.Text = $"Audit records: {auditLogs.Count} ({auditLogs.Count(log => !log.IsSynced)} waiting to upload)";
 	}
 
 	private bool ValidateForm() =>

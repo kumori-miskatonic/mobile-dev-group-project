@@ -45,6 +45,56 @@ public class FindItDatabase
             .ToListAsync();
     }
 
+    public async Task<List<SyncAuditLog>> GetAuditLogsAsync()
+    {
+        await InitializeAsync();
+        return await _database.Table<SyncAuditLog>()
+            .OrderByDescending(log => log.OccurredAt)
+            .Take(50)
+            .ToListAsync();
+    }
+
+    public async Task<List<SyncAuditLog>> GetPendingAuditLogsAsync()
+    {
+        await InitializeAsync();
+        return await _database.Table<SyncAuditLog>()
+            .Where(log => !log.IsSynced)
+            .OrderBy(log => log.OccurredAt)
+            .ToListAsync();
+    }
+
+    public async Task AddAuditLogAsync(string operation, string outcome, string details, string itemId = "")
+    {
+        await InitializeAsync();
+        await _database.InsertAsync(new SyncAuditLog
+        {
+            DeviceId = Services.SyncService.GetDeviceId(),
+            Operation = operation,
+            Outcome = outcome,
+            Details = details,
+            ItemId = itemId,
+            OccurredAt = DateTime.UtcNow,
+            IsSynced = false
+        });
+    }
+
+    public async Task MarkAuditLogsSyncedAsync(IEnumerable<string> acceptedLogIds)
+    {
+        await InitializeAsync();
+        var ids = acceptedLogIds.Distinct().ToList();
+        await _database.RunInTransactionAsync(connection =>
+        {
+            foreach (var id in ids)
+            {
+                var log = connection.Find<SyncAuditLog>(id);
+                if (log is null)
+                    continue;
+                log.IsSynced = true;
+                connection.Update(log);
+            }
+        });
+    }
+
     public async Task<List<PendingItemChange>> GetPendingChangesAsync()
     {
         await InitializeAsync();
@@ -119,7 +169,7 @@ public class FindItDatabase
                     LocationFound = incoming.LocationFound,
                     DateFound = incoming.DateFound,
                     Status = incoming.Status,
-                    LastModified = incoming.LastModified.ToUniversalTime(),
+                    LastModified = NormalizeUtc(incoming.LastModified),
                     ModifiedBy = incoming.ModifiedBy,
                     IsDeleted = incoming.IsDeleted,
                     DownloadedAt = DateTime.UtcNow,
@@ -178,10 +228,23 @@ public class FindItDatabase
             foreach (var incoming in staged)
             {
                 var existing = connection.Find<LostItem>(incoming.LostItemId);
+                var existingLastModified = existing is null
+                    ? (DateTime?)null
+                    : NormalizeUtc(existing.LastModified);
                 if (existing is not null
-                    && existing.LastModified.ToUniversalTime() > incoming.LastModified.ToUniversalTime())
+                    && existingLastModified > NormalizeUtc(incoming.LastModified))
                 {
                     result.Ignored++;
+                    connection.Insert(new SyncAuditLog
+                    {
+                        DeviceId = Services.SyncService.GetDeviceId(),
+                        Operation = "ConflictResolution",
+                        Outcome = "DeviceVersionKept",
+                        Details = $"Last-write-wins kept the newer device version of {existing.ItemName}.",
+                        ItemId = existing.Id,
+                        OccurredAt = processedAt,
+                        IsSynced = false
+                    });
                     incoming.ProcessedAt = processedAt;
                     connection.Update(incoming);
                     continue;
@@ -193,7 +256,7 @@ public class FindItDatabase
                 item.LocationFound = incoming.LocationFound;
                 item.DateFound = incoming.DateFound;
                 item.Status = incoming.Status;
-                item.LastModified = incoming.LastModified.ToUniversalTime();
+                item.LastModified = NormalizeUtc(incoming.LastModified);
                 item.ModifiedBy = incoming.ModifiedBy;
                 item.IsDeleted = incoming.IsDeleted;
 
@@ -212,6 +275,21 @@ public class FindItDatabase
                         result.Deleted++;
                     else
                         result.Updated++;
+                }
+
+                if (existingLastModified is not null
+                    && existingLastModified != NormalizeUtc(incoming.LastModified))
+                {
+                    connection.Insert(new SyncAuditLog
+                    {
+                        DeviceId = Services.SyncService.GetDeviceId(),
+                        Operation = "ConflictResolution",
+                        Outcome = "ServerVersionApplied",
+                        Details = $"Last-write-wins applied the newer server version of {item.ItemName}.",
+                        ItemId = item.Id,
+                        OccurredAt = processedAt,
+                        IsSynced = false
+                    });
                 }
 
                 incoming.ProcessedAt = processedAt;
@@ -282,6 +360,7 @@ public class FindItDatabase
         await _database.CreateTableAsync<ItemChange>();
         await _database.CreateTableAsync<SyncState>();
         await _database.CreateTableAsync<IncomingChange>();
+        await _database.CreateTableAsync<SyncAuditLog>();
     }
 
     private static ItemChange CreateChange(LostItem item, string changeType)
@@ -304,4 +383,11 @@ public class FindItDatabase
 
     private static string ValueOrFallback(string value, string? fallback) =>
         string.IsNullOrWhiteSpace(value) ? fallback ?? string.Empty : value;
+
+    private static DateTime NormalizeUtc(DateTime value) => value.Kind switch
+    {
+        DateTimeKind.Utc => value,
+        DateTimeKind.Local => value.ToUniversalTime(),
+        _ => DateTime.SpecifyKind(value, DateTimeKind.Utc)
+    };
 }

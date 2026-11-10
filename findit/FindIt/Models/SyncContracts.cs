@@ -2,6 +2,7 @@ namespace FindIt.Models;
 
 public sealed class PushChangesRequest
 {
+    public string DeviceId { get; set; } = string.Empty;
     public List<PendingItemChange> Changes { get; set; } = [];
 }
 
@@ -25,6 +26,35 @@ public sealed class PushChangesResponse
 {
     public List<string> AcceptedChangeIds { get; set; } = [];
     public int ReceivedCount { get; set; }
+    public List<ConflictResult> Conflicts { get; set; } = [];
+}
+
+public sealed class ConflictResult
+{
+    public string LostItemId { get; set; } = string.Empty;
+    public string Resolution { get; set; } = string.Empty;
+    public string Details { get; set; } = string.Empty;
+}
+
+public sealed class UploadAuditLogsRequest
+{
+    public string DeviceId { get; set; } = string.Empty;
+    public List<SyncAuditLogDto> Logs { get; set; } = [];
+}
+
+public sealed class SyncAuditLogDto
+{
+    public string Id { get; set; } = string.Empty;
+    public string Operation { get; set; } = string.Empty;
+    public string Outcome { get; set; } = string.Empty;
+    public string Details { get; set; } = string.Empty;
+    public string ItemId { get; set; } = string.Empty;
+    public DateTime OccurredAt { get; set; }
+}
+
+public sealed class UploadAuditLogsResponse
+{
+    public List<string> AcceptedLogIds { get; set; } = [];
 }
 
 public sealed class PullChangesRequest

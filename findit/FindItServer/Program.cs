@@ -57,6 +57,17 @@ await using (var connection = new SqliteConnection(connectionString))
             IsDeleted INTEGER NOT NULL,
             PRIMARY KEY (BatchId, LostItemId)
         );
+
+        CREATE TABLE IF NOT EXISTS SyncAuditLogs (
+            Id TEXT PRIMARY KEY,
+            DeviceId TEXT NOT NULL,
+            Operation TEXT NOT NULL,
+            Outcome TEXT NOT NULL,
+            Details TEXT NOT NULL,
+            ItemId TEXT NOT NULL,
+            OccurredAt TEXT NOT NULL,
+            ReceivedAt TEXT NOT NULL
+        );
         """;
 
     await command.ExecuteNonQueryAsync();
@@ -72,7 +83,7 @@ app.MapGet("/health", () => Results.Ok(new
 app.MapPost("/sync/push", async (PushChangesRequest request) =>
 {
     if (request.Changes.Count == 0)
-        return Results.Ok(new PushChangesResponse([], 0));
+        return Results.Ok(new PushChangesResponse([], 0, []));
 
     if (request.Changes.Any(change =>
         string.IsNullOrWhiteSpace(change.ChangeId)
@@ -83,6 +94,8 @@ app.MapPost("/sync/push", async (PushChangesRequest request) =>
     }
 
     var acceptedIds = new List<string>();
+    var conflicts = new List<ConflictResult>();
+    var deviceId = string.IsNullOrWhiteSpace(request.DeviceId) ? "unknown-device" : request.DeviceId;
 
     await using var connection = new SqliteConnection(connectionString);
     await connection.OpenAsync();
@@ -92,6 +105,22 @@ app.MapPost("/sync/push", async (PushChangesRequest request) =>
     {
         foreach (var change in request.Changes)
         {
+            DateTime? existingLastModified = null;
+            string? existingModifiedBy = null;
+            var existingCommand = connection.CreateCommand();
+            existingCommand.Transaction = transaction;
+            existingCommand.CommandText =
+                "SELECT LastModified, ModifiedBy FROM LostItems WHERE Id = $id;";
+            existingCommand.Parameters.AddWithValue("$id", change.LostItemId);
+            await using (var existingReader = await existingCommand.ExecuteReaderAsync())
+            {
+                if (await existingReader.ReadAsync())
+                {
+                    existingLastModified = ParseDatabaseDate(existingReader.GetString(0));
+                    existingModifiedBy = existingReader.GetString(1);
+                }
+            }
+
             var receiveCommand = connection.CreateCommand();
             receiveCommand.Transaction = transaction;
             receiveCommand.CommandText =
@@ -139,7 +168,26 @@ app.MapPost("/sync/push", async (PushChangesRequest request) =>
                 itemCommand.Parameters.AddWithValue("$lastModified", ToDatabaseDate(change.LastModified));
                 itemCommand.Parameters.AddWithValue("$modifiedBy", change.ModifiedBy);
                 itemCommand.Parameters.AddWithValue("$isDeleted", change.IsDeleted ? 1 : 0);
-                await itemCommand.ExecuteNonQueryAsync();
+                var itemApplied = await itemCommand.ExecuteNonQueryAsync() > 0;
+
+                if (existingLastModified is not null)
+                {
+                    var incomingWon = NormalizeUtc(change.LastModified) >= existingLastModified.Value;
+                    var outcome = incomingWon ? "IncomingVersionApplied" : "ServerVersionKept";
+                    var details = incomingWon
+                        ? $"Last-write-wins applied the device version from {change.ModifiedBy}."
+                        : $"Last-write-wins kept the newer server version from {existingModifiedBy}.";
+                    conflicts.Add(new ConflictResult(change.LostItemId, outcome, details));
+                    await InsertServerAuditAsync(
+                        connection, transaction, Guid.NewGuid().ToString(), deviceId,
+                        "ConflictResolution", outcome, details, change.LostItemId, DateTime.UtcNow);
+                }
+
+                await InsertServerAuditAsync(
+                    connection, transaction, Guid.NewGuid().ToString(), deviceId,
+                    "PushChange", itemApplied ? "Applied" : "AcceptedNotApplied",
+                    $"{change.ChangeType} change for {change.ItemName} was processed.",
+                    change.LostItemId, DateTime.UtcNow);
 
                 var processedCommand = connection.CreateCommand();
                 processedCommand.Transaction = transaction;
@@ -154,7 +202,55 @@ app.MapPost("/sync/push", async (PushChangesRequest request) =>
         }
 
         await transaction.CommitAsync();
-        return Results.Ok(new PushChangesResponse(acceptedIds, request.Changes.Count));
+        return Results.Ok(new PushChangesResponse(acceptedIds, request.Changes.Count, conflicts));
+    }
+    catch
+    {
+        await transaction.RollbackAsync();
+        throw;
+    }
+});
+
+app.MapPost("/sync/audit", async (UploadAuditLogsRequest request) =>
+{
+    if (string.IsNullOrWhiteSpace(request.DeviceId))
+        return Results.BadRequest(new { error = "A device ID is required." });
+
+    var acceptedIds = new List<string>();
+    await using var connection = new SqliteConnection(connectionString);
+    await connection.OpenAsync();
+    await using var transaction = connection.BeginTransaction();
+
+    try
+    {
+        foreach (var log in request.Logs)
+        {
+            if (string.IsNullOrWhiteSpace(log.Id))
+                continue;
+
+            var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText =
+                """
+                INSERT OR IGNORE INTO SyncAuditLogs
+                    (Id, DeviceId, Operation, Outcome, Details, ItemId, OccurredAt, ReceivedAt)
+                VALUES
+                    ($id, $deviceId, $operation, $outcome, $details, $itemId, $occurredAt, $receivedAt);
+                """;
+            command.Parameters.AddWithValue("$id", log.Id);
+            command.Parameters.AddWithValue("$deviceId", request.DeviceId);
+            command.Parameters.AddWithValue("$operation", log.Operation);
+            command.Parameters.AddWithValue("$outcome", log.Outcome);
+            command.Parameters.AddWithValue("$details", log.Details);
+            command.Parameters.AddWithValue("$itemId", log.ItemId ?? string.Empty);
+            command.Parameters.AddWithValue("$occurredAt", ToDatabaseDate(log.OccurredAt));
+            command.Parameters.AddWithValue("$receivedAt", ToDatabaseDate(DateTime.UtcNow));
+            await command.ExecuteNonQueryAsync();
+            acceptedIds.Add(log.Id);
+        }
+
+        await transaction.CommitAsync();
+        return Results.Ok(new UploadAuditLogsResponse(acceptedIds));
     }
     catch
     {
@@ -277,11 +373,49 @@ app.MapPost("/sync/pull/ack", async (AcknowledgePullRequest request) =>
 
 app.Run();
 
-static string ToDatabaseDate(DateTime value) => value.ToUniversalTime().ToString("O");
+static string ToDatabaseDate(DateTime value) => NormalizeUtc(value).ToString("O");
 static DateTime ParseDatabaseDate(string value) =>
-    DateTime.Parse(value, null, System.Globalization.DateTimeStyles.RoundtripKind).ToUniversalTime();
+    NormalizeUtc(DateTime.Parse(value, null, System.Globalization.DateTimeStyles.RoundtripKind));
 
-public sealed record PushChangesRequest(List<PendingItemChange> Changes);
+static DateTime NormalizeUtc(DateTime value) => value.Kind switch
+{
+    DateTimeKind.Utc => value,
+    DateTimeKind.Local => value.ToUniversalTime(),
+    _ => DateTime.SpecifyKind(value, DateTimeKind.Utc)
+};
+
+static async Task InsertServerAuditAsync(
+    SqliteConnection connection,
+    SqliteTransaction transaction,
+    string id,
+    string deviceId,
+    string operation,
+    string outcome,
+    string details,
+    string itemId,
+    DateTime occurredAt)
+{
+    var command = connection.CreateCommand();
+    command.Transaction = transaction;
+    command.CommandText =
+        """
+        INSERT OR IGNORE INTO SyncAuditLogs
+            (Id, DeviceId, Operation, Outcome, Details, ItemId, OccurredAt, ReceivedAt)
+        VALUES
+            ($id, $deviceId, $operation, $outcome, $details, $itemId, $occurredAt, $receivedAt);
+        """;
+    command.Parameters.AddWithValue("$id", id);
+    command.Parameters.AddWithValue("$deviceId", deviceId);
+    command.Parameters.AddWithValue("$operation", operation);
+    command.Parameters.AddWithValue("$outcome", outcome);
+    command.Parameters.AddWithValue("$details", details);
+    command.Parameters.AddWithValue("$itemId", itemId);
+    command.Parameters.AddWithValue("$occurredAt", ToDatabaseDate(occurredAt));
+    command.Parameters.AddWithValue("$receivedAt", ToDatabaseDate(DateTime.UtcNow));
+    await command.ExecuteNonQueryAsync();
+}
+
+public sealed record PushChangesRequest(string DeviceId, List<PendingItemChange> Changes);
 
 public sealed record PendingItemChange(
     string ChangeId,
@@ -297,7 +431,22 @@ public sealed record PendingItemChange(
     string ModifiedBy,
     bool IsDeleted);
 
-public sealed record PushChangesResponse(List<string> AcceptedChangeIds, int ReceivedCount);
+public sealed record PushChangesResponse(
+    List<string> AcceptedChangeIds,
+    int ReceivedCount,
+    List<ConflictResult> Conflicts);
+
+public sealed record ConflictResult(string LostItemId, string Resolution, string Details);
+
+public sealed record UploadAuditLogsRequest(string DeviceId, List<SyncAuditLogDto> Logs);
+public sealed record SyncAuditLogDto(
+    string Id,
+    string Operation,
+    string Outcome,
+    string Details,
+    string ItemId,
+    DateTime OccurredAt);
+public sealed record UploadAuditLogsResponse(List<string> AcceptedLogIds);
 
 public sealed record PullChangesRequest(string DeviceId, DateTime LastPulledAt);
 

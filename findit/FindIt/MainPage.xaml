@@ -1,4 +1,4 @@
-﻿<ContentPage x:Class="FindIt.MainPage">
+<ContentPage x:Class="FindIt.MainPage">
 
     <ScrollView>
         <VerticalStackLayout Padding="20" Spacing="18">
@@ -63,13 +63,36 @@
                     <Label Text="Use your computer's LAN address when testing on a physical phone." FontSize="13" />
                     <Entry x:Name="ServerUrlEntry" Text="http://10.0.2.2:5187" Placeholder="http://computer-ip:5187" Keyboard="Url" />
                     <Label x:Name="PendingCountLabel" Text="Pending changes: 0" FontAttributes="Bold" />
-                    <Button x:Name="SyncButton" Text="Send Pending Changes" Clicked="OnSyncClicked" />
+                    <Button x:Name="SyncButton" Text="Sync Now" Clicked="OnSyncClicked" />
                     <Button x:Name="PullButton" Text="Download Server Changes" Clicked="OnPullClicked" />
                     <Button x:Name="ApplyPullButton" Text="Apply Downloaded Changes" Clicked="OnApplyPullClicked" />
                     <Label x:Name="SyncStatusLabel" Text="Changes are cleared only after server confirmation." FontSize="13" />
                     <Label x:Name="PullStatusLabel" Text="Server changes have not been checked yet." FontSize="13" />
                 </VerticalStackLayout>
             </Border>
+
+            <Label Text="Sync Audit Trail" FontSize="23" FontAttributes="Bold" Margin="0,8,0,0" />
+            <Label x:Name="AuditCountLabel" Text="Audit records: 0" FontAttributes="Bold" />
+            <VerticalStackLayout BindableLayout.ItemsSource="{Binding AuditLogs}" Spacing="8">
+                <BindableLayout.EmptyView>
+                    <Label Text="No sync audit records yet." Padding="8" FontAttributes="Italic" />
+                </BindableLayout.EmptyView>
+                <BindableLayout.ItemTemplate>
+                    <DataTemplate>
+                        <Border Padding="12" StrokeShape="RoundRectangle 10">
+                            <VerticalStackLayout Spacing="3">
+                                <Grid ColumnDefinitions="*,Auto">
+                                    <Label Text="{Binding Operation}" FontAttributes="Bold" TextColor="#2563EB" />
+                                    <Label Grid.Column="1" Text="{Binding Outcome}" FontAttributes="Bold" />
+                                </Grid>
+                                <Label Text="{Binding Details}" />
+                                <Label Text="{Binding OccurredAt, StringFormat='UTC: {0:yyyy-MM-dd HH:mm:ss}'}" FontSize="12" />
+                                <Label Text="{Binding IsSynced, StringFormat='Uploaded to server: {0}'}" FontSize="12" />
+                            </VerticalStackLayout>
+                        </Border>
+                    </DataTemplate>
+                </BindableLayout.ItemTemplate>
+            </VerticalStackLayout>
 
             <Label Text="Change Tracking" FontSize="23" FontAttributes="Bold" Margin="0,8,0,0" />
             <VerticalStackLayout BindableLayout.ItemsSource="{Binding Changes}" Spacing="8">

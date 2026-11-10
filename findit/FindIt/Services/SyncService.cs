@@ -21,7 +21,11 @@ public sealed class SyncService(HttpClient httpClient)
 
         using var response = await httpClient.PostAsJsonAsync(
             $"{baseUrl}/sync/push",
-            new PushChangesRequest { Changes = [.. changes] },
+            new PushChangesRequest
+            {
+                DeviceId = GetOrCreateDeviceId(),
+                Changes = [.. changes]
+            },
             cancellationToken);
 
         response.EnsureSuccessStatusCode();
@@ -70,6 +74,39 @@ public sealed class SyncService(HttpClient httpClient)
 
         response.EnsureSuccessStatusCode();
     }
+
+    public async Task<UploadAuditLogsResponse> UploadAuditLogsAsync(
+        string serverBaseUrl,
+        IReadOnlyCollection<SyncAuditLog> logs,
+        CancellationToken cancellationToken = default)
+    {
+        if (logs.Count == 0)
+            return new UploadAuditLogsResponse();
+
+        var baseUrl = ValidateServerBaseUrl(serverBaseUrl);
+        using var response = await httpClient.PostAsJsonAsync(
+            $"{baseUrl}/sync/audit",
+            new UploadAuditLogsRequest
+            {
+                DeviceId = GetOrCreateDeviceId(),
+                Logs = logs.Select(log => new SyncAuditLogDto
+                {
+                    Id = log.Id,
+                    Operation = log.Operation,
+                    Outcome = log.Outcome,
+                    Details = log.Details,
+                    ItemId = log.ItemId,
+                    OccurredAt = log.OccurredAt
+                }).ToList()
+            },
+            cancellationToken);
+
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<UploadAuditLogsResponse>(cancellationToken)
+            ?? throw new InvalidOperationException("The server returned an empty audit response.");
+    }
+
+    public static string GetDeviceId() => GetOrCreateDeviceId();
 
     private static string ValidateServerBaseUrl(string serverBaseUrl)
     {

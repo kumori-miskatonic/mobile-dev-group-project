@@ -353,3 +353,74 @@ The completed server download batch contains a populated `CompletedAt` value, pr
 ## Week 4 Summary
 
 Week 4 completed the server-to-device half of synchronization. FindIt now downloads only records changed since the previous completed pull, stages them for inspection, applies inserts and updates transactionally, honors server-side soft deletes, and records a server acknowledgement after successful processing.
+
+# Week 5 - Conflict Handling and Audit Trail
+
+During Week 5, the team completed the two-way synchronization workflow by adding a deterministic conflict strategy, persistent audit logging, a single sync action, and automatic synchronization attempts.
+
+## Conflict Strategy
+
+FindIt uses a **last-write-wins** strategy based on each record's UTC `LastModified` value. When the server and device contain different versions of the same lost item, the version with the newest timestamp is retained.
+
+- During a push, the server compares the incoming device timestamp with the current server timestamp. A newer or equal device version is applied; an older device version is accepted but does not overwrite the newer server record.
+- During a pull, the device compares the downloaded timestamp with the local timestamp. A newer or equal server version is applied; an older server version is ignored.
+- Every conflict decision records the item identifier, selected outcome, explanation, device identifier, and UTC time in the audit trail.
+
+This strategy prevents an older edit from silently replacing a newer edit while ensuring that the same inputs always produce the same result.
+
+## Audit Logging
+
+The Android application stores synchronization evidence in its local `SyncAuditLogs` table. Each entry records:
+
+- The operation, such as `ManualSync`, `AutomaticSync`, or `ConflictResolution`
+- The outcome, such as `Succeeded`, `Failed`, `Offline`, `IncomingVersionApplied`, or `ServerVersionKept`
+- A readable description of the event
+- The related lost-item identifier when applicable
+- The device identifier and UTC occurrence time
+- Whether the record has been uploaded to the server
+
+Pending audit records are sent to `POST /sync/audit`. The server stores them idempotently in its own `SyncAuditLogs` table, and the device marks only acknowledged records as uploaded.
+
+## Manual and Automatic Sync
+
+The **Sync Now** button performs the complete synchronization sequence: push pending device changes, resolve and record conflicts, apply any previously downloaded batch, pull and apply current server changes, acknowledge the download, and upload pending audit records.
+
+FindIt also attempts the same workflow automatically when the main page appears and whenever network connectivity returns. If the device is offline, the app preserves all pending data and records an `AutomaticSync` audit entry with the `Offline` outcome. Online successes and network/server failures are also recorded, providing visible evidence of every attempt.
+
+## Week 5 Evidence
+
+The following screenshots document the completed Week 5 conflict, audit, and automatic-synchronization tests.
+
+### Conflict Strategy Working
+
+The device and server audit records show which version won after the same item was edited on both sides.
+
+![Week 5 conflict strategy working](Screenshots/Week%205%20Conflict%20Strategy.png)
+
+### Audit Logging on the Device
+
+The app's **Sync Audit Trail** and the local `SyncAuditLogs` table show the recorded conflict and synchronization events.
+
+![Week 5 device audit log](Screenshots/Week%205%20Device%20Audit%20Log.png)
+
+### Audit Logging Synchronized to the Server
+
+The server `SyncAuditLogs` table contains the device audit identifiers and their operation, outcome, details, device ID, and timestamps.
+
+![Week 5 server audit log](Screenshots/Week%205%20Server%20Audit%20Log.png)
+
+### Automatic Sync Attempt - Online
+
+An `AutomaticSync` record with a successful online outcome shows that synchronization ran without selecting **Sync Now**.
+
+![Week 5 automatic sync online](Screenshots/Week%205%20Automatic%20Sync%20Online.png)
+
+### Automatic Sync Attempt - Offline
+
+An `AutomaticSync` record with the `Offline` outcome shows that the attempt was recorded and pending data remained safe when no network was available.
+
+![Week 5 automatic sync offline](Screenshots/Week%205%20Automatic%20Sync%20Offline.png)
+
+## Week 5 Summary
+
+Week 5 added predictable last-write-wins conflict resolution, persistent audit evidence on both the Android device and server, a one-button full sync workflow, and automatic online/offline sync attempts. Together these features make synchronization behavior traceable and prevent older records from overwriting newer work.
