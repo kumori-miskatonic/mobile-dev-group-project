@@ -2,10 +2,10 @@
 
     <ScrollView>
         <VerticalStackLayout Padding="20" Spacing="18">
-            <Label Text="FindIt" FontSize="32" FontAttributes="Bold" />
+            <Image Source="Resources/Images/findit_logo.png" WidthRequest="150" HorizontalOptions="Start" />
             <Label Text="Campus Lost &amp; Found Management" FontSize="16" />
 
-            <Border Padding="16" StrokeShape="RoundRectangle 14">
+            <Border Stroke="#1e2024" StrokeThickness="2" Padding="16" StrokeShape="RoundRectangle 14">
                 <VerticalStackLayout Spacing="12">
                     <Label x:Name="FormTitleLabel" Text="Register Found Item" FontSize="21" FontAttributes="Bold" />
                     <Entry x:Name="ItemNameEntry" Placeholder="Item name" />
@@ -20,7 +20,7 @@
                     </Picker>
                     <Entry x:Name="ModifiedByEntry" Placeholder="Staff member name" />
                     <Grid ColumnDefinitions="*,*" ColumnSpacing="10">
-                        <Button x:Name="SaveButton" Grid.Column="0" Text="Create Item" Clicked="OnSaveClicked" />
+                        <Button x:Name="SaveButton" Grid.Column="0" Text="Create Item" Clicked="OnSaveClicked" BackgroundColor="#2165c4" TextColor="White" />
                         <Button x:Name="CancelButton" Grid.Column="1" Text="Cancel Edit" IsVisible="False" Clicked="OnCancelClicked" />
                     </Grid>
                 </VerticalStackLayout>
@@ -28,7 +28,7 @@
 
             <Grid ColumnDefinitions="*,Auto">
                 <Label Text="Active Items" FontSize="23" FontAttributes="Bold" VerticalOptions="Center" />
-                <Button Grid.Column="1" Text="Refresh" Clicked="OnRefreshClicked" />
+                <Button Grid.Column="1" Text="Refresh" Clicked="OnRefreshClicked" BackgroundColor="#2165c4" TextColor="White" />
             </Grid>
 
             <VerticalStackLayout BindableLayout.ItemsSource="{Binding Items}" Spacing="12">
@@ -37,7 +37,7 @@
                 </BindableLayout.EmptyView>
                 <BindableLayout.ItemTemplate>
                     <DataTemplate>
-                        <Border Padding="14" StrokeShape="RoundRectangle 12">
+                        <Border Padding="14" StrokeShape="RoundRectangle 12" Stroke="#1e2024" StrokeThickness="2">
                             <VerticalStackLayout Spacing="6">
                                 <Grid ColumnDefinitions="*,Auto">
                                     <Label Text="{Binding ItemName}" FontSize="19" FontAttributes="Bold" />
@@ -48,8 +48,8 @@
                                 <Label Text="{Binding DateFound, StringFormat='Date found: {0:MMM d, yyyy}'}" />
                                 <Label Text="{Binding ModifiedBy, StringFormat='Last modified by: {0}'}" />
                                 <Grid ColumnDefinitions="*,*" ColumnSpacing="10" Margin="0,6,0,0">
-                                    <Button Grid.Column="0" Text="Edit" CommandParameter="{Binding .}" Clicked="OnEditClicked" />
-                                    <Button Grid.Column="1" Text="Delete" BackgroundColor="#B42318" TextColor="White" CommandParameter="{Binding .}" Clicked="OnDeleteClicked" />
+                                    <Button Grid.Column="0" Text="Edit" CommandParameter="{Binding .}" Clicked="OnEditClicked" BackgroundColor="#2165c4" />
+                                    <Button Grid.Column="1" Text="Delete" BackgroundColor="#b3544d" TextColor="White" CommandParameter="{Binding .}" Clicked="OnDeleteClicked" />
                                 </Grid>
                             </VerticalStackLayout>
                         </Border>
@@ -57,21 +57,21 @@
                 </BindableLayout.ItemTemplate>
             </VerticalStackLayout>
 
-            <Border Padding="16" StrokeShape="RoundRectangle 14">
+            <Border Padding="16" StrokeShape="RoundRectangle 14" Stroke="#1e2024" StrokeThickness="2">
                 <VerticalStackLayout Spacing="10">
                     <Label Text="Server Synchronization" FontSize="21" FontAttributes="Bold" />
                     <Label Text="Use your computer's LAN address when testing on a physical phone." FontSize="13" />
                     <Entry x:Name="ServerUrlEntry" Text="http://10.0.2.2:5187" Placeholder="http://computer-ip:5187" Keyboard="Url" />
                     <Label x:Name="PendingCountLabel" Text="Pending changes: 0" FontAttributes="Bold" />
-                    <Button x:Name="SyncButton" Text="Sync Now" Clicked="OnSyncClicked" />
-                    <Button x:Name="PullButton" Text="Download Server Changes" Clicked="OnPullClicked" />
-                    <Button x:Name="ApplyPullButton" Text="Apply Downloaded Changes" Clicked="OnApplyPullClicked" />
+                    <Button x:Name="SyncButton" Text="Sync Now" Clicked="OnSyncClicked" BackgroundColor="#2165c4" TextColor="White" />
+                    <Button x:Name="PullButton" Text="Download Server Changes" Clicked="OnPullClicked" BackgroundColor="#2165c4" TextColor="White" />
+                    <Button x:Name="ApplyPullButton" Text="Apply Downloaded Changes" Clicked="OnApplyPullClicked" BackgroundColor="#2165c4" TextColor="White" />
                     <Label x:Name="SyncStatusLabel" Text="Changes are cleared only after server confirmation." FontSize="13" />
                     <Label x:Name="PullStatusLabel" Text="Server changes have not been checked yet." FontSize="13" />
                 </VerticalStackLayout>
             </Border>
 
-            <Label Text="Sync Audit Trail" FontSize="23" FontAttributes="Bold" Margin="0,8,0,0" />
+            <Label Text="Sync Audit Trail" FontSize="24" FontAttributes="Bold" Margin="0,8,0,0" />
             <Label x:Name="AuditCountLabel" Text="Audit records: 0" FontAttributes="Bold" />
             <VerticalStackLayout BindableLayout.ItemsSource="{Binding AuditLogs}" Spacing="8">
                 <BindableLayout.EmptyView>
@@ -79,11 +79,11 @@
                 </BindableLayout.EmptyView>
                 <BindableLayout.ItemTemplate>
                     <DataTemplate>
-                        <Border Padding="12" StrokeShape="RoundRectangle 10">
+                        <Border Padding="12" StrokeShape="RoundRectangle 10" Stroke="#1e2024" StrokeThickness="2">
                             <VerticalStackLayout Spacing="3">
                                 <Grid ColumnDefinitions="*,Auto">
-                                    <Label Text="{Binding Operation}" FontAttributes="Bold" TextColor="#2563EB" />
-                                    <Label Grid.Column="1" Text="{Binding Outcome}" FontAttributes="Bold" />
+                                    <Label Text="{Binding Operation}" FontAttributes="Bold" FontSize="18" TextColor="#1e2024" />
+                                    <Label Grid.Column="1" Text="{Binding Outcome}" FontAttributes="Bold" TextColor="#2165c4" />
                                 </Grid>
                                 <Label Text="{Binding Details}" />
                                 <Label Text="{Binding OccurredAt, StringFormat='UTC: {0:yyyy-MM-dd HH:mm:ss}'}" FontSize="12" />
@@ -101,9 +101,9 @@
                 </BindableLayout.EmptyView>
                 <BindableLayout.ItemTemplate>
                     <DataTemplate>
-                        <Border Padding="12" StrokeShape="RoundRectangle 10">
+                        <Border Padding="12" StrokeShape="RoundRectangle 10" Stroke="#1e2024" StrokeThickness="2">
                             <VerticalStackLayout Spacing="3">
-                                <Label Text="{Binding ChangeType}" FontAttributes="Bold" TextColor="#2563EB" />
+                                <Label Text="{Binding ChangeType}" FontAttributes="Bold" TextColor="#2165c4" />
                                 <Label Text="{Binding Summary}" />
                                 <Label Text="{Binding ModifiedBy, StringFormat='Changed by: {0}'}" />
                                 <Label Text="{Binding ChangedAt, StringFormat='UTC: {0:yyyy-MM-dd HH:mm:ss}'}" />
